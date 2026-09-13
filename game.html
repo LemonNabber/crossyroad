@@ -1,1 +1,143 @@
-
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crossy Road - Three.js</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #87CEEB; /* Sky blue background */
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // Sky blue background
+        
+        // Camera setup - Orthographic for isometric look
+        const frustumSize = 20;
+        const aspect = window.innerWidth / window.innerHeight;
+        const camera = new THREE.OrthographicCamera(
+            -frustumSize * aspect / 2, 
+            frustumSize * aspect / 2,
+            frustumSize / 2, 
+            -frustumSize / 2,
+            0.1, 
+            1000
+        );
+        
+        // Position camera for isometric view
+        camera.position.set(10, 15, 10);
+        camera.lookAt(0, 0, 0);
+        
+        // Renderer setup with shadows enabled
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+        
+        // Lighting setup - Ambient + Directional for bright, toy-like look
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 20, 5);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.5;
+        directionalLight.shadow.camera.far = 50;
+        directionalLight.shadow.camera.left = -20;
+        directionalLight.shadow.camera.right = 20;
+        directionalLight.shadow.camera.top = 20;
+        directionalLight.shadow.camera.bottom = -20;
+        scene.add(directionalLight);
+        
+        // World data structure - array of row objects
+        const rows = [];
+        const numRows = 20;
+        const rowWidth = 16;
+        const rowDepth = 1;
+        
+        // Initialize world data - all grass for now
+        for (let i = 0; i < numRows; i++) {
+            rows.push({
+                type: 'grass',
+                z: i - Math.floor(numRows / 2) // Center the rows around z=0
+            });
+        }
+        
+        // Materials
+        const grassMaterial = new THREE.MeshLambertMaterial({ 
+            color: 0x4A9B2E, // Grass green
+            flatShading: true // Blocky Crossy Road look
+        });
+        
+        const lineMaterial = new THREE.MeshBasicMaterial({ 
+            color: 0x2E5A1A // Darker green for dividing lines
+        });
+        
+        // Function to create world geometry from data
+        function createWorld() {
+            rows.forEach((row, index) => {
+                // Create row tile based on data
+                if (row.type === 'grass') {
+                    const geometry = new THREE.BoxGeometry(rowWidth, 0.2, rowDepth);
+                    const mesh = new THREE.Mesh(geometry, grassMaterial);
+                    mesh.position.set(0, 0, row.z);
+                    mesh.receiveShadow = true;
+                    scene.add(mesh);
+                }
+                
+                // Add dividing line at the front edge of each row
+                const lineGeometry = new THREE.BoxGeometry(rowWidth + 0.1, 0.05, 0.05);
+                const lineMesh = new THREE.Mesh(lineGeometry, lineMaterial);
+                lineMesh.position.set(0, 0.125, row.z + 0.5);
+                scene.add(lineMesh);
+            });
+            
+            // Add final dividing line at the back of the last row
+            const finalLineGeometry = new THREE.BoxGeometry(rowWidth + 0.1, 0.05, 0.05);
+            const finalLineMesh = new THREE.Mesh(finalLineGeometry, lineMaterial);
+            const lastRow = rows[rows.length - 1];
+            finalLineMesh.position.set(0, 0.125, lastRow.z - 0.5);
+            scene.add(finalLineMesh);
+        }
+        
+        // Build the world
+        createWorld();
+        
+        // Handle window resize
+        function onWindowResize() {
+            const aspect = window.innerWidth / window.innerHeight;
+            camera.left = -frustumSize * aspect / 2;
+            camera.right = frustumSize * aspect / 2;
+            camera.top = frustumSize / 2;
+            camera.bottom = -frustumSize / 2;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        window.addEventListener('resize', onWindowResize, false);
+        
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            renderer.render(scene, camera);
+        }
+        
+        animate();
+    </script>
+</body>
+</html>

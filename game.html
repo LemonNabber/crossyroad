@@ -54,6 +54,16 @@
                 FAR: 1000,
                 POSITION: { x: 0, y: 50, z: 30 },
                 LOOK_AT: { x: 0, y: 0, z: 0 }
+            },
+            CARS: {
+                WIDTH: 3.8,             // Car width (slightly less than 2 tiles)
+                HEIGHT: 1.0,            // Car height (half a tile)
+                DEPTH: 1.8,             // Car depth
+                SPEED: 2.0,             // Units per second movement speed
+                SPAWN_RATE: 0.1,        // Probability of spawning a car per second (reduced)
+                MAX_CARS_PER_ROW: 5,    // Maximum cars per row
+                MIN_GAP: 4.0,           // Minimum gap between cars
+                COLORS: [0xff0000, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff, 0xffa500] // Car colors
             }
         };
 
@@ -63,9 +73,13 @@
                 name: 'grass',
                 color: 0x90EE90,        // Pale green
                 height: 0.1
+            },
+            STREET: {
+                name: 'street',
+                color: 0x808080,        // Grey
+                height: 0.05
             }
             // Future ground types will be added here
-            // ROAD: { name: 'road', color: 0x404040, height: 0.05 },
             // WATER: { name: 'water', color: 0x4169E1, height: -0.1 }
         };
 
@@ -74,27 +88,95 @@
                 this.rows = new Map();
                 this.currentPlayerRow = 0;
                 this.worldOffset = 0;
+                this.lastCarSpawnTime = 0;
             }
 
             // Generate a row configuration
             generateRow(rowIndex) {
-                // For now, all rows are grass
-                // Later this will have logic for different ground types
-                return {
+                let groundType;
+                let carDirection = null;
+                
+                if (rowIndex < 8) {
+                    // Rows 0-7 are always grass
+                    groundType = GROUND_TYPES.GRASS;
+                } else {
+                    // From row 8 onwards, randomly alternate between grass and street
+                    // Use row index as seed for consistent results
+                    const random = Math.sin(rowIndex * 12.9898) * 43758.5453;
+                    const randomValue = random - Math.floor(random);
+                    groundType = randomValue < 0.5 ? GROUND_TYPES.GRASS : GROUND_TYPES.STREET;
+                    
+                    // If it's a street, determine car direction
+                    if (groundType === GROUND_TYPES.STREET) {
+                        // Use different seed for direction to avoid correlation
+                        const dirRandom = Math.sin(rowIndex * 78.233) * 43758.5453;
+                        const dirValue = dirRandom - Math.floor(dirRandom);
+                        carDirection = dirValue < 0.5 ? 'left' : 'right'; // left = left-to-right, right = right-to-left
+                    }
+                }
+                
+                const row = {
                     index: rowIndex,
-                    groundType: GROUND_TYPES.GRASS,
-                    tiles: this.generateTiles(rowIndex)
+                    groundType: groundType,
+                    carDirection: carDirection,
+                    cars: [],
+                    tiles: this.generateTiles(rowIndex, groundType)
                 };
+
+                // Pre-populate street rows with cars
+                if (groundType === GROUND_TYPES.STREET) {
+                    this.generateInitialCars(row);
+                }
+
+                return row;
+            }
+
+            // Generate initial cars for a street row
+            generateInitialCars(row) {
+                const gridWidth = CONFIG.WORLD.GRID_SIZE * CONFIG.WORLD.TILE_SIZE;
+                const numCars = Math.floor(Math.random() * 4) + 1; // 1-4 cars initially
+                
+                // Generate random positions across the row
+                const positions = [];
+                for (let i = 0; i < numCars; i++) {
+                    let attempts = 0;
+                    let validPosition = false;
+                    
+                    while (!validPosition && attempts < 20) {
+                        // Random position across the visible area
+                        const x = (Math.random() - 0.5) * gridWidth * 0.8; // 80% of grid width
+                        
+                        // Check if position is far enough from other cars
+                        const tooClose = positions.some(pos => Math.abs(pos - x) < CONFIG.CARS.MIN_GAP);
+                        
+                        if (!tooClose) {
+                            positions.push(x);
+                            validPosition = true;
+                        }
+                        attempts++;
+                    }
+                }
+
+                // Create cars at the valid positions
+                positions.forEach(x => {
+                    const car = {
+                        x: x,
+                        z: row.index,
+                        color: CONFIG.CARS.COLORS[Math.floor(Math.random() * CONFIG.CARS.COLORS.length)],
+                        id: Math.random().toString(36)
+                    };
+                    row.cars.push(car);
+                });
             }
 
             // Generate tiles for a row
-            generateTiles(rowIndex) {
+            generateTiles(rowIndex, groundType) {
                 const tiles = [];
                 for (let col = 0; col < CONFIG.WORLD.GRID_SIZE; col++) {
                     tiles.push({
                         x: col,
                         z: rowIndex,
-                        groundType: GROUND_TYPES.GRASS
+                        groundType: groundType
                     });
                 }
                 return tiles;
@@ -141,6 +223,58 @@
                 }
                 return rows;
             }
+
+            // Update cars in all street rows
+            updateCars(deltaTime) {
+                // Update existing cars
+                this.rows.forEach(row => {
+                    if (row.groundType === GROUND_TYPES.STREET) {
+                        // Move existing cars
+                        row.cars = row.cars.filter(car => {
+                            const direction = row.carDirection === 'left' ? 1 : -1;
+                            car.x += direction * CONFIG.CARS.SPEED * deltaTime;
+                            
+                            // Remove cars that have moved off screen
+                            const gridWidth = CONFIG.WORLD.GRID_SIZE * CONFIG.WORLD.TILE_SIZE;
+                            return car.x > -gridWidth && car.x < gridWidth;
+                        });
+
+                        // Try to spawn new cars (only if under limit and random chance)
+                        if (row.cars.length < CONFIG.CARS.MAX_CARS_PER_ROW && 
+                            Math.random() < CONFIG.CARS.SPAWN_RATE * deltaTime) {
+                            this.trySpawnCar(row);
+                        }
+                    }
+                });
+            }
+
+            // Try to spawn a new car on a street row (checks for collisions)
+            trySpawnCar(row) {
+                const gridWidth = CONFIG.WORLD.GRID_SIZE * CONFIG.WORLD.TILE_SIZE;
+                const spawnX = row.carDirection === 'left' ? -gridWidth / 2 - 2 : gridWidth / 2 + 2;
+                
+                // Check if spawn position would collide with existing cars
+                const wouldCollide = row.cars.some(existingCar => {
+                    const distance = Math.abs(existingCar.x - spawnX);
+                    return distance < CONFIG.CARS.MIN_GAP;
+                });
+
+                // Only spawn if no collision and under car limit
+                if (!wouldCollide) {
+                    this.spawnCar(row, spawnX);
+                }
+            }
+
+            // Spawn a new car on a street row at specified position
+            spawnCar(row, spawnX) {
+                const car = {
+                    x: spawnX,
+                    z: row.index,
+                    color: CONFIG.CARS.COLORS[Math.floor(Math.random() * CONFIG.CARS.COLORS.length)],
+                    id: Math.random().toString(36)
+                };
+                row.cars.push(car);
+            }
         }
 
         class GameRenderer {
@@ -166,7 +300,16 @@
                 this.tileInstances = new Map();
                 this.gridLines = new Map();
                 this.rowLabels = new Map();
+                this.cars = new Map();
                 this.player = null;
+
+                // Car geometry and materials
+                this.carGeometry = new THREE.BoxGeometry(
+                    CONFIG.CARS.WIDTH,
+                    CONFIG.CARS.HEIGHT, 
+                    CONFIG.CARS.DEPTH
+                );
+                this.carMaterials = new Map();
 
                 this.init();
             }
@@ -248,6 +391,12 @@
                 this.playerMaterial = new THREE.MeshLambertMaterial({ 
                     color: 0xffffff 
                 });
+
+                // Create car materials for each color
+                CONFIG.CARS.COLORS.forEach((color, index) => {
+                    const material = new THREE.MeshLambertMaterial({ color: color });
+                    this.carMaterials.set(color, material);
+                });
             }
 
             renderWorld(world, playerRow) {
@@ -255,6 +404,7 @@
                 this.clearTiles();
                 this.clearGridLines();
                 this.clearRowLabels();
+                this.clearCars();
 
                 // Get visible rows
                 const visibleRows = world.getVisibleRows(playerRow);
@@ -269,6 +419,13 @@
 
                 // Render row labels
                 this.renderRowLabels(visibleRows);
+
+                // Render cars
+                visibleRows.forEach(row => {
+                    if (row.groundType === GROUND_TYPES.STREET) {
+                        this.renderCars(row);
+                    }
+                });
             }
 
             createPlayer() {
@@ -341,6 +498,33 @@
                     this.scene.remove(label);
                 });
                 this.rowLabels.clear();
+            }
+
+            clearCars() {
+                // Remove all existing cars
+                this.cars.forEach(car => {
+                    this.scene.remove(car);
+                });
+                this.cars.clear();
+            }
+
+            renderCars(row) {
+                row.cars.forEach(car => {
+                    const material = this.carMaterials.get(car.color);
+                    const mesh = new THREE.Mesh(this.carGeometry, material);
+                    
+                    // Position car
+                    const worldX = car.x;
+                    const worldZ = -car.z * CONFIG.WORLD.TILE_SIZE;
+                    const worldY = CONFIG.CARS.HEIGHT / 2 + 0.15; // Above the street
+                    
+                    mesh.position.set(worldX, worldY, worldZ);
+                    mesh.castShadow = true;
+                    
+                    const carKey = `${car.id}`;
+                    this.cars.set(carKey, mesh);
+                    this.scene.add(mesh);
+                });
             }
 
             createTextTexture(text, fontSize = 64, fontColor = 'white') {
@@ -474,6 +658,7 @@
                 this.playerGridX = Math.floor(CONFIG.WORLD.GRID_SIZE / 2); // Center column
                 this.playerGridZ = 4; // Start at row 4
                 this.isRunning = false;
+                this.lastTime = 0;
 
                 this.init();
             }
@@ -547,6 +732,14 @@
 
             gameLoop() {
                 if (!this.isRunning) return;
+
+                // Calculate delta time
+                const currentTime = performance.now() / 1000; // Convert to seconds
+                const deltaTime = this.lastTime ? currentTime - this.lastTime : 0;
+                this.lastTime = currentTime;
+
+                // Update cars
+                this.world.updateCars(deltaTime);
 
                 // Update game state
                 this.update();

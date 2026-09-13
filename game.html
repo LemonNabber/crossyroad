@@ -3,141 +3,574 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crossy Road - Three.js</title>
+    <title>Crossy Road Game</title>
     <style>
         body {
             margin: 0;
             padding: 0;
             overflow: hidden;
-            background-color: #87CEEB; /* Sky blue background */
+            background: #87CEEB;
+            font-family: Arial, sans-serif;
         }
-        canvas {
-            display: block;
+        
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+            color: white;
+            font-size: 16px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
         }
     </style>
 </head>
 <body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui">
+            <div>Crossy Road Game</div>
+            <div>Use WASD or Arrow Keys to move</div>
+        </div>
+    </div>
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    
     <script>
-        // Scene setup
-        const scene = new THREE.Scene();
-        scene.background = new THREE.Color(0x87CEEB); // Sky blue background
-        
-        // Camera setup - Orthographic for isometric look
-        const frustumSize = 20;
-        const aspect = window.innerWidth / window.innerHeight;
-        const camera = new THREE.OrthographicCamera(
-            -frustumSize * aspect / 2, 
-            frustumSize * aspect / 2,
-            frustumSize / 2, 
-            -frustumSize / 2,
-            0.1, 
-            1000
-        );
-        
-        // Position camera for isometric view
-        camera.position.set(10, 15, 10);
-        camera.lookAt(0, 0, 0);
-        
-        // Renderer setup with shadows enabled
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.shadowMap.enabled = true;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        document.body.appendChild(renderer.domElement);
-        
-        // Lighting setup - Ambient + Directional for bright, toy-like look
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
-        scene.add(ambientLight);
-        
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
-        directionalLight.position.set(10, 20, 5);
-        directionalLight.castShadow = true;
-        directionalLight.shadow.mapSize.width = 2048;
-        directionalLight.shadow.mapSize.height = 2048;
-        directionalLight.shadow.camera.near = 0.5;
-        directionalLight.shadow.camera.far = 50;
-        directionalLight.shadow.camera.left = -20;
-        directionalLight.shadow.camera.right = 20;
-        directionalLight.shadow.camera.top = 20;
-        directionalLight.shadow.camera.bottom = -20;
-        scene.add(directionalLight);
-        
-        // World data structure - array of row objects
-        const rows = [];
-        const numRows = 20;
-        const rowWidth = 16;
-        const rowDepth = 1;
-        
-        // Initialize world data - all grass for now
-        for (let i = 0; i < numRows; i++) {
-            rows.push({
-                type: 'grass',
-                z: i - Math.floor(numRows / 2) // Center the rows around z=0
-            });
-        }
-        
-        // Materials
-        const grassMaterial = new THREE.MeshLambertMaterial({ 
-            color: 0x4A9B2E, // Grass green
-            flatShading: true // Blocky Crossy Road look
-        });
-        
-        const lineMaterial = new THREE.MeshBasicMaterial({ 
-            color: 0x2E5A1A // Darker green for dividing lines
-        });
-        
-        // Function to create world geometry from data
-        function createWorld() {
-            rows.forEach((row, index) => {
-                // Create row tile based on data
-                if (row.type === 'grass') {
-                    const geometry = new THREE.BoxGeometry(rowWidth, 0.2, rowDepth);
-                    const mesh = new THREE.Mesh(geometry, grassMaterial);
-                    mesh.position.set(0, 0, row.z);
-                    mesh.receiveShadow = true;
-                    scene.add(mesh);
+        // Game Configuration
+        const CONFIG = {
+            WORLD: {
+                GRID_SIZE: 20,           // Number of tiles per row/column
+                TILE_SIZE: 2,            // Size of each tile
+                VISIBLE_ROWS: 15,        // Number of rows to render at once
+            },
+            CAMERA: {
+                FOV: 45,
+                NEAR: 0.1,
+                FAR: 1000,
+                POSITION: { x: 0, y: 50, z: 30 },
+                LOOK_AT: { x: 0, y: 0, z: 0 }
+            }
+        };
+
+        // Ground Types
+        const GROUND_TYPES = {
+            GRASS: {
+                name: 'grass',
+                color: 0x90EE90,        // Pale green
+                height: 0.1
+            }
+            // Future ground types will be added here
+            // ROAD: { name: 'road', color: 0x404040, height: 0.05 },
+            // WATER: { name: 'water', color: 0x4169E1, height: -0.1 }
+        };
+
+        class GameWorld {
+            constructor() {
+                this.rows = new Map();
+                this.currentPlayerRow = 0;
+                this.worldOffset = 0;
+            }
+
+            // Generate a row configuration
+            generateRow(rowIndex) {
+                // For now, all rows are grass
+                // Later this will have logic for different ground types
+                return {
+                    index: rowIndex,
+                    groundType: GROUND_TYPES.GRASS,
+                    tiles: this.generateTiles(rowIndex)
+                };
+            }
+
+            // Generate tiles for a row
+            generateTiles(rowIndex) {
+                const tiles = [];
+                for (let col = 0; col < CONFIG.WORLD.GRID_SIZE; col++) {
+                    tiles.push({
+                        x: col,
+                        z: rowIndex,
+                        groundType: GROUND_TYPES.GRASS
+                    });
+                }
+                return tiles;
+            }
+
+            // Convert row index to world Z coordinate
+            // Row 0 should be closest to camera (highest Z value)
+            rowToWorldZ(rowIndex) {
+                return -rowIndex * CONFIG.WORLD.TILE_SIZE;
+            }
+
+            // Get or create a row
+            getRow(rowIndex) {
+                if (!this.rows.has(rowIndex)) {
+                    this.rows.set(rowIndex, this.generateRow(rowIndex));
+                }
+                return this.rows.get(rowIndex);
+            }
+
+            // Get visible rows around the player or camera
+            getVisibleRows(centerRow) {
+                const rows = [];
+                
+                // Always show rows starting from 0 when player is at row 5 or below
+                const displayCenterRow = Math.max(5, centerRow);
+                
+                // Always show exactly 15 rows starting from row 0 when camera is stationary
+                // or 15 rows centered around the player when camera is following
+                let startRow, endRow;
+                
+                if (centerRow <= 5) {
+                    // Camera is stationary - show rows 0 through 14
+                    startRow = 0;
+                    endRow = 14;
+                } else {
+                    // Camera is following player - show 15 rows centered on player
+                    const halfVisible = Math.floor(CONFIG.WORLD.VISIBLE_ROWS / 2);
+                    startRow = Math.max(0, centerRow - halfVisible);
+                    endRow = startRow + CONFIG.WORLD.VISIBLE_ROWS - 1;
                 }
                 
-                // Add dividing line at the front edge of each row
-                const lineGeometry = new THREE.BoxGeometry(rowWidth + 0.1, 0.05, 0.05);
-                const lineMesh = new THREE.Mesh(lineGeometry, lineMaterial);
-                lineMesh.position.set(0, 0.125, row.z + 0.5);
-                scene.add(lineMesh);
-            });
+                for (let i = startRow; i <= endRow; i++) {
+                    rows.push(this.getRow(i));
+                }
+                return rows;
+            }
+        }
+
+        class GameRenderer {
+            constructor() {
+                this.scene = new THREE.Scene();
+                this.camera = new THREE.PerspectiveCamera(
+                    CONFIG.CAMERA.FOV,
+                    window.innerWidth / window.innerHeight,
+                    CONFIG.CAMERA.NEAR,
+                    CONFIG.CAMERA.FAR
+                );
+                this.renderer = new THREE.WebGLRenderer({ 
+                    canvas: document.getElementById('gameCanvas'),
+                    antialias: true 
+                });
+                
+                this.tileGeometry = new THREE.BoxGeometry(
+                    CONFIG.WORLD.TILE_SIZE, 
+                    0.2, 
+                    CONFIG.WORLD.TILE_SIZE
+                );
+                this.tileMaterials = new Map();
+                this.tileInstances = new Map();
+                this.gridLines = new Map();
+                this.rowLabels = new Map();
+                this.player = null;
+
+                this.init();
+            }
+
+            init() {
+                // Setup renderer
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.shadowMap.enabled = true;
+                this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                this.renderer.setClearColor(0x87CEEB, 1);
+
+                // Setup camera
+                this.camera.position.set(
+                    CONFIG.CAMERA.POSITION.x,
+                    CONFIG.CAMERA.POSITION.y,
+                    CONFIG.CAMERA.POSITION.z
+                );
+                this.camera.lookAt(
+                    CONFIG.CAMERA.LOOK_AT.x,
+                    CONFIG.CAMERA.LOOK_AT.y,
+                    CONFIG.CAMERA.LOOK_AT.z
+                );
+
+                // Setup lighting
+                this.setupLighting();
+
+                // Create materials for ground types
+                this.createMaterials();
+
+                // Handle window resize
+                window.addEventListener('resize', () => this.onWindowResize());
+            }
+
+            setupLighting() {
+                // Ambient light for even lighting
+                const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+                this.scene.add(ambientLight);
+
+                // Directional light for depth
+                const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+                directionalLight.position.set(10, 20, 5);
+                directionalLight.castShadow = true;
+                directionalLight.shadow.mapSize.width = 2048;
+                directionalLight.shadow.mapSize.height = 2048;
+                directionalLight.shadow.camera.near = 0.5;
+                directionalLight.shadow.camera.far = 50;
+                directionalLight.shadow.camera.left = -25;
+                directionalLight.shadow.camera.right = 25;
+                directionalLight.shadow.camera.top = 25;
+                directionalLight.shadow.camera.bottom = -25;
+                this.scene.add(directionalLight);
+            }
+
+            createMaterials() {
+                // Create materials for ground types
+                for (const [key, groundType] of Object.entries(GROUND_TYPES)) {
+                    const material = new THREE.MeshLambertMaterial({ 
+                        color: groundType.color 
+                    });
+                    this.tileMaterials.set(groundType.name, material);
+                }
+
+                // Create grid line materials
+                this.blackLineMaterial = new THREE.LineBasicMaterial({ 
+                    color: 0x000000, 
+                    linewidth: 1,
+                    transparent: true,
+                    opacity: 0.8
+                });
+                this.whiteLineMaterial = new THREE.LineBasicMaterial({ 
+                    color: 0xffffff, 
+                    linewidth: 1,
+                    transparent: true,
+                    opacity: 0.8
+                });
+
+                // Create player material and geometry
+                this.playerGeometry = new THREE.BoxGeometry(0.8, 0.8, 0.8);
+                this.playerMaterial = new THREE.MeshLambertMaterial({ 
+                    color: 0xffffff 
+                });
+            }
+
+            renderWorld(world, playerRow) {
+                // Clear existing tiles, grid lines, and labels
+                this.clearTiles();
+                this.clearGridLines();
+                this.clearRowLabels();
+
+                // Get visible rows
+                const visibleRows = world.getVisibleRows(playerRow);
+
+                // Render each row
+                visibleRows.forEach(row => {
+                    this.renderRow(row);
+                });
+
+                // Render grid lines
+                this.renderGridLines(visibleRows);
+
+                // Render row labels
+                this.renderRowLabels(visibleRows);
+            }
+
+            createPlayer() {
+                if (this.player) {
+                    this.scene.remove(this.player);
+                }
+                
+                this.player = new THREE.Mesh(this.playerGeometry, this.playerMaterial);
+                this.player.castShadow = true;
+                this.scene.add(this.player);
+            }
+
+            updatePlayer(playerGridX, playerGridZ) {
+                if (!this.player) {
+                    this.createPlayer();
+                }
+
+                // Convert grid coordinates to world coordinates
+                const worldX = (playerGridX - CONFIG.WORLD.GRID_SIZE / 2) * CONFIG.WORLD.TILE_SIZE;
+                const worldZ = -playerGridZ * CONFIG.WORLD.TILE_SIZE; // Negative to flip row direction
+                const worldY = 0.6; // Position above the tile
+
+                this.player.position.set(worldX, worldY, worldZ);
+            }
+
+            renderRow(row) {
+                row.tiles.forEach(tile => {
+                    this.renderTile(tile);
+                });
+            }
+
+            renderTile(tile) {
+                const material = this.tileMaterials.get(tile.groundType.name);
+                const mesh = new THREE.Mesh(this.tileGeometry, material);
+                
+                // Position tile
+                const worldX = (tile.x - CONFIG.WORLD.GRID_SIZE / 2) * CONFIG.WORLD.TILE_SIZE;
+                const worldZ = -tile.z * CONFIG.WORLD.TILE_SIZE; // Negative to flip row direction
+                const worldY = tile.groundType.height;
+                
+                mesh.position.set(worldX, worldY, worldZ);
+                mesh.receiveShadow = true;
+                
+                // Store reference for cleanup
+                const tileKey = `${tile.x}-${tile.z}`;
+                this.tileInstances.set(tileKey, mesh);
+                
+                this.scene.add(mesh);
+            }
+
+            clearTiles() {
+                // Remove all existing tile meshes
+                this.tileInstances.forEach(mesh => {
+                    this.scene.remove(mesh);
+                });
+                this.tileInstances.clear();
+            }
+
+            clearGridLines() {
+                // Remove all existing grid lines
+                this.gridLines.forEach(line => {
+                    this.scene.remove(line);
+                });
+                this.gridLines.clear();
+            }
+
+            clearRowLabels() {
+                // Remove all existing row labels
+                this.rowLabels.forEach(label => {
+                    this.scene.remove(label);
+                });
+                this.rowLabels.clear();
+            }
+
+            createTextTexture(text, fontSize = 64, fontColor = 'white') {
+                // Create a canvas to draw text on
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+                
+                // Set canvas size
+                canvas.width = 128;
+                canvas.height = 128;
+                
+                // Set font properties
+                context.font = `${fontSize}px Arial`;
+                context.fillStyle = fontColor;
+                context.textAlign = 'center';
+                context.textBaseline = 'middle';
+                
+                // Clear canvas and draw text
+                context.clearRect(0, 0, canvas.width, canvas.height);
+                context.fillText(text, canvas.width / 2, canvas.height / 2);
+                
+                // Create texture from canvas
+                const texture = new THREE.CanvasTexture(canvas);
+                texture.needsUpdate = true;
+                
+                return texture;
+            }
+
+            renderRowLabels(visibleRows) {
+                visibleRows.forEach(row => {
+                    const texture = this.createTextTexture(row.index.toString());
+                    const material = new THREE.SpriteMaterial({ 
+                        map: texture,
+                        transparent: true
+                    });
+                    const sprite = new THREE.Sprite(material);
+                    
+                    // Position at the rightmost edge of the row
+                    const rightmostX = (CONFIG.WORLD.GRID_SIZE / 2) * CONFIG.WORLD.TILE_SIZE;
+                    const worldZ = -row.index * CONFIG.WORLD.TILE_SIZE;
+                    const worldY = 1.5; // Above the tiles
+                    
+                    sprite.position.set(rightmostX, worldY, worldZ);
+                    sprite.scale.set(2, 2, 2); // Make it visible but not too large
+                    
+                    const labelKey = `row-label-${row.index}`;
+                    this.rowLabels.set(labelKey, sprite);
+                    this.scene.add(sprite);
+                });
+            }
+
+            renderGridLines(visibleRows) {
+                if (visibleRows.length === 0) return;
+
+                const minRow = visibleRows[0].index;
+                const maxRow = visibleRows[visibleRows.length - 1].index;
+                const gridWidth = CONFIG.WORLD.GRID_SIZE * CONFIG.WORLD.TILE_SIZE;
+                const lineHeight = 0.25; // Slightly above the tiles
+
+                // Black lines through rows (horizontal lines) - at tile edges
+                for (let rowIndex = minRow; rowIndex <= maxRow + 1; rowIndex++) {
+                    const geometry = new THREE.BufferGeometry();
+                    // Position at the edge of tiles with flipped Z coordinate
+                    const z = (-rowIndex * CONFIG.WORLD.TILE_SIZE) + (CONFIG.WORLD.TILE_SIZE / 2);
+                    const startX = -gridWidth / 2;
+                    const endX = gridWidth / 2;
+
+                    const points = [
+                        new THREE.Vector3(startX, lineHeight, z),
+                        new THREE.Vector3(endX, lineHeight, z)
+                    ];
+
+                    geometry.setFromPoints(points);
+                    const line = new THREE.Line(geometry, this.blackLineMaterial);
+                    
+                    const lineKey = `row-${rowIndex}`;
+                    this.gridLines.set(lineKey, line);
+                    this.scene.add(line);
+                }
+
+                // White lines through columns (vertical lines) - at tile edges
+                for (let col = 0; col <= CONFIG.WORLD.GRID_SIZE; col++) {
+                    const geometry = new THREE.BufferGeometry();
+                    // Position at the edge of tiles (subtract half tile size to align with edges)
+                    const x = ((col - CONFIG.WORLD.GRID_SIZE / 2) * CONFIG.WORLD.TILE_SIZE) - (CONFIG.WORLD.TILE_SIZE / 2);
+                    const startZ = (-minRow * CONFIG.WORLD.TILE_SIZE) + (CONFIG.WORLD.TILE_SIZE / 2);
+                    const endZ = (-(maxRow + 1) * CONFIG.WORLD.TILE_SIZE) + (CONFIG.WORLD.TILE_SIZE / 2);
+
+                    const points = [
+                        new THREE.Vector3(x, lineHeight, startZ),
+                        new THREE.Vector3(x, lineHeight, endZ)
+                    ];
+
+                    geometry.setFromPoints(points);
+                    const line = new THREE.Line(geometry, this.whiteLineMaterial);
+                    
+                    const lineKey = `col-${col}-${minRow}-${maxRow}`;
+                    this.gridLines.set(lineKey, line);
+                    this.scene.add(line);
+                }
+            }
+
+            updateCamera(playerRow) {
+                // Only follow player if they're at row 5 or beyond
+                // If player is at row 4 or lower, keep camera at row 5 position
+                const cameraFollowRow = Math.max(5, playerRow);
+                
+                // Follow player row - with flipped Z coordinate
+                const targetZ = -cameraFollowRow * CONFIG.WORLD.TILE_SIZE + CONFIG.CAMERA.POSITION.z;
+                this.camera.position.z = targetZ;
+                
+                const lookAtZ = -cameraFollowRow * CONFIG.WORLD.TILE_SIZE;
+                this.camera.lookAt(CONFIG.CAMERA.LOOK_AT.x, CONFIG.CAMERA.LOOK_AT.y, lookAtZ);
+            }
+
+            render() {
+                this.renderer.render(this.scene, this.camera);
+            }
+
+            onWindowResize() {
+                this.camera.aspect = window.innerWidth / window.innerHeight;
+                this.camera.updateProjectionMatrix();
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+            }
+        }
+
+        class Game {
+            constructor() {
+                this.world = new GameWorld();
+                this.renderer = new GameRenderer();
+                this.playerGridX = Math.floor(CONFIG.WORLD.GRID_SIZE / 2); // Center column
+                this.playerGridZ = 4; // Start at row 4
+                this.isRunning = false;
+
+                this.init();
+            }
+
+            init() {
+                // Setup input handling
+                this.setupInput();
+
+                // Initial render
+                this.update();
+
+                // Start game loop
+                this.start();
+            }
+
+            setupInput() {
+                document.addEventListener('keydown', (event) => {
+                    switch(event.code) {
+                        case 'KeyW':
+                        case 'ArrowUp':
+                            this.movePlayer(0, 1); // Move forward (positive Z)
+                            break;
+                        case 'KeyS':
+                        case 'ArrowDown':
+                            this.movePlayer(0, -1); // Move backward (negative Z)
+                            break;
+                        case 'KeyA':
+                        case 'ArrowLeft':
+                            this.movePlayer(-1, 0); // Move left (negative X)
+                            break;
+                        case 'KeyD':
+                        case 'ArrowRight':
+                            this.movePlayer(1, 0); // Move right (positive X)
+                            break;
+                    }
+                });
+            }
+
+            movePlayer(deltaX, deltaZ) {
+                // Update player grid position
+                this.playerGridX += deltaX;
+                this.playerGridZ += deltaZ;
+
+                // Clamp player position to valid grid bounds for X
+                this.playerGridX = Math.max(0, Math.min(CONFIG.WORLD.GRID_SIZE - 1, this.playerGridX));
+                
+                // Clamp player position to not go below row 0
+                this.playerGridZ = Math.max(0, this.playerGridZ);
+
+                this.update();
+            }
+
+            update() {
+                // Render the world around the player
+                this.renderer.renderWorld(this.world, this.playerGridZ);
+                
+                // Update player position
+                this.renderer.updatePlayer(this.playerGridX, this.playerGridZ);
+                
+                // Update camera to follow player
+                this.renderer.updateCamera(this.playerGridZ);
+                
+                // Render frame
+                this.renderer.render();
+            }
+
+            start() {
+                this.isRunning = true;
+                this.gameLoop();
+            }
+
+            gameLoop() {
+                if (!this.isRunning) return;
+
+                // Update game state
+                this.update();
+
+                // Continue loop
+                requestAnimationFrame(() => this.gameLoop());
+            }
+
+            stop() {
+                this.isRunning = false;
+            }
+        }
+
+        // Initialize game when page loads
+        window.addEventListener('load', () => {
+            const game = new Game();
             
-            // Add final dividing line at the back of the last row
-            const finalLineGeometry = new THREE.BoxGeometry(rowWidth + 0.1, 0.05, 0.05);
-            const finalLineMesh = new THREE.Mesh(finalLineGeometry, lineMaterial);
-            const lastRow = rows[rows.length - 1];
-            finalLineMesh.position.set(0, 0.125, lastRow.z - 0.5);
-            scene.add(finalLineMesh);
-        }
-        
-        // Build the world
-        createWorld();
-        
-        // Handle window resize
-        function onWindowResize() {
-            const aspect = window.innerWidth / window.innerHeight;
-            camera.left = -frustumSize * aspect / 2;
-            camera.right = frustumSize * aspect / 2;
-            camera.top = frustumSize / 2;
-            camera.bottom = -frustumSize / 2;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        }
-        
-        window.addEventListener('resize', onWindowResize, false);
-        
-        // Animation loop
-        function animate() {
-            requestAnimationFrame(animate);
-            renderer.render(scene, camera);
-        }
-        
-        animate();
+            // Make game accessible globally for debugging
+            window.game = game;
+            
+            console.log('Crossy Road game initialized!');
+            console.log('Use WASD or Arrow Keys to move');
+            console.log('Current ground types:', GROUND_TYPES);
+        });
     </script>
 </body>
 </html>

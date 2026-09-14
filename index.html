@@ -36,6 +36,7 @@
         <div id="ui">
             <div>Crossy Road Game</div>
             <div>Use WASD or Arrow Keys to move</div>
+            <div id="gameStatus"></div>
         </div>
     </div>
 
@@ -64,6 +65,10 @@
                 MAX_CARS_PER_ROW: 5,    // Maximum cars per row
                 MIN_GAP: 4.0,           // Minimum gap between cars
                 COLORS: [0xff0000, 0x0000ff, 0xffff00, 0xff00ff, 0x00ffff, 0xffa500] // Car colors
+            },
+            PLAYER: {
+                SIZE: 0.8,              // Player cube size
+                COLLISION_RADIUS: 0.7   // Collision detection radius
             }
         };
 
@@ -225,7 +230,9 @@
             }
 
             // Update cars in all street rows
-            updateCars(deltaTime) {
+            updateCars(deltaTime, playerWorldX, playerWorldZ) {
+                let playerHit = false;
+                
                 // Update existing cars
                 this.rows.forEach(row => {
                     if (row.groundType === GROUND_TYPES.STREET) {
@@ -233,6 +240,11 @@
                         row.cars = row.cars.filter(car => {
                             const direction = row.carDirection === 'left' ? 1 : -1;
                             car.x += direction * CONFIG.CARS.SPEED * deltaTime;
+                            
+                            // Check collision with player
+                            if (this.checkCarPlayerCollision(car, playerWorldX, playerWorldZ)) {
+                                playerHit = true;
+                            }
                             
                             // Remove cars that have moved off screen
                             const gridWidth = CONFIG.WORLD.GRID_SIZE * CONFIG.WORLD.TILE_SIZE;
@@ -246,6 +258,31 @@
                         }
                     }
                 });
+
+                return playerHit;
+            }
+
+            // Check collision between a car and the player
+            checkCarPlayerCollision(car, playerWorldX, playerWorldZ) {
+                // First check if they're on the same row (Z coordinate)
+                const carWorldZ = -car.z * CONFIG.WORLD.TILE_SIZE;
+                if (Math.abs(playerWorldZ - carWorldZ) > CONFIG.WORLD.TILE_SIZE / 2) {
+                    return false; // Not on same row
+                }
+                
+                // Then check if they overlap in X direction
+                const carWorldX = car.x;
+                const carHalfWidth = CONFIG.CARS.WIDTH / 2;
+                const playerHalfSize = CONFIG.PLAYER.SIZE / 2;
+                
+                // Check if player overlaps with car in X direction
+                const playerLeftEdge = playerWorldX - playerHalfSize;
+                const playerRightEdge = playerWorldX + playerHalfSize;
+                const carLeftEdge = carWorldX - carHalfWidth;
+                const carRightEdge = carWorldX + carHalfWidth;
+                
+                // Collision occurs if player and car overlap in X direction
+                return !(playerRightEdge < carLeftEdge || playerLeftEdge > carRightEdge);
             }
 
             // Try to spawn a new car on a street row (checks for collisions)
@@ -659,6 +696,18 @@
                 this.playerGridZ = 4; // Start at row 4
                 this.isRunning = false;
                 this.lastTime = 0;
+                this.isPlayerDead = false;
+                this.deathTime = 0;
+                this.respawnDelay = 2.0; // 2 seconds
+
+                // Tracks the furthest-forward row the player has ever reached.
+                // The map/camera are driven by this value, not by the player's
+                // current row - so the visible rows and camera position only
+                // ever move forward (once the player passes row 5) and never
+                // slide back when the player steps backward. The player is
+                // still free to walk back and forth across whatever rows are
+                // currently visible.
+                this.maxRowReached = this.playerGridZ;
 
                 this.init();
             }
@@ -697,29 +746,60 @@
                 });
             }
 
+            // Mirrors GameWorld.getVisibleRows' windowing logic to find the
+            // lowest row index currently visible, based on progress made
+            // (maxRowReached), so the player can't wander back past what's
+            // actually rendered.
+            getVisibleStartRow() {
+                if (this.maxRowReached <= 5) {
+                    return 0;
+                }
+                const halfVisible = Math.floor(CONFIG.WORLD.VISIBLE_ROWS / 2);
+                return Math.max(0, this.maxRowReached - halfVisible);
+            }
+
             movePlayer(deltaX, deltaZ) {
+                // Don't allow movement if player is dead
+                if (this.isPlayerDead) {
+                    return;
+                }
+
                 // Update player grid position
                 this.playerGridX += deltaX;
                 this.playerGridZ += deltaZ;
 
                 // Clamp player position to valid grid bounds for X
                 this.playerGridX = Math.max(0, Math.min(CONFIG.WORLD.GRID_SIZE - 1, this.playerGridX));
-                
-                // Clamp player position to not go below row 0
-                this.playerGridZ = Math.max(0, this.playerGridZ);
+
+                // Clamp player position to not go below row 0, and not go
+                // behind the lowest row currently visible on the map - the
+                // player can freely roam the visible rows, but can't wander
+                // off into rows that have scrolled out of view.
+                const minVisibleRow = this.getVisibleStartRow();
+                this.playerGridZ = Math.max(minVisibleRow, Math.max(0, this.playerGridZ));
+
+                // Record the furthest-forward progress made so far. The map
+                // and camera are driven by this value, so moving backward
+                // never affects them - they only advance once the player
+                // pushes past their previous best.
+                this.maxRowReached = Math.max(this.maxRowReached, this.playerGridZ);
 
                 this.update();
             }
 
             update() {
-                // Render the world around the player
-                this.renderer.renderWorld(this.world, this.playerGridZ);
+                // Render the world based on the furthest progress made, not
+                // the player's current row - this keeps the map static while
+                // the player moves backward, and only shifts it forward once
+                // the player passes their previous furthest row.
+                this.renderer.renderWorld(this.world, this.maxRowReached);
                 
-                // Update player position
+                // Update player position - the player itself can move freely
+                // within whatever rows are currently visible.
                 this.renderer.updatePlayer(this.playerGridX, this.playerGridZ);
                 
-                // Update camera to follow player
-                this.renderer.updateCamera(this.playerGridZ);
+                // Camera follows the furthest progress made, same as the map
+                this.renderer.updateCamera(this.maxRowReached);
                 
                 // Render frame
                 this.renderer.render();
@@ -738,14 +818,60 @@
                 const deltaTime = this.lastTime ? currentTime - this.lastTime : 0;
                 this.lastTime = currentTime;
 
-                // Update cars
-                this.world.updateCars(deltaTime);
+                // Handle death and respawn
+                if (this.isPlayerDead) {
+                    if (currentTime - this.deathTime > this.respawnDelay) {
+                        this.respawnPlayer();
+                    }
+                } else {
+                    // Calculate player world position
+                    const playerWorldX = (this.playerGridX - CONFIG.WORLD.GRID_SIZE / 2) * CONFIG.WORLD.TILE_SIZE;
+                    const playerWorldZ = -this.playerGridZ * CONFIG.WORLD.TILE_SIZE;
+
+                    // Update cars and check for collisions
+                    const playerHit = this.world.updateCars(deltaTime, playerWorldX, playerWorldZ);
+
+                    if (playerHit) {
+                        this.killPlayer();
+                    }
+                }
 
                 // Update game state
                 this.update();
 
                 // Continue loop
                 requestAnimationFrame(() => this.gameLoop());
+            }
+
+            killPlayer() {
+                this.isPlayerDead = true;
+                this.deathTime = performance.now() / 1000;
+                console.log("Player died! Respawning in", this.respawnDelay, "seconds...");
+                
+                // Visual feedback - make player red
+                if (this.renderer.player) {
+                    this.renderer.player.material = new THREE.MeshLambertMaterial({ color: 0xff0000 });
+                }
+
+                // Update UI
+                document.getElementById('gameStatus').textContent = 'You died! Respawning...';
+                document.getElementById('gameStatus').style.color = 'red';
+            }
+
+            respawnPlayer() {
+                this.isPlayerDead = false;
+                this.playerGridX = Math.floor(CONFIG.WORLD.GRID_SIZE / 2); // Reset to center
+                this.playerGridZ = 4; // Reset to starting row
+                this.maxRowReached = this.playerGridZ; // Reset progress tracking on death/respawn
+                console.log("Player respawned!");
+                
+                // Reset player color to white
+                if (this.renderer.player) {
+                    this.renderer.player.material = this.renderer.playerMaterial;
+                }
+
+                // Update UI
+                document.getElementById('gameStatus').textContent = '';
             }
 
             stop() {

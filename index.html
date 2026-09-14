@@ -28,6 +28,54 @@
             font-size: 16px;
             text-shadow: 2px 2px 4px rgba(0,0,0,0.5);
         }
+
+        #markerToggle {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 8px;
+            color: white;
+            font-size: 14px;
+            user-select: none;
+        }
+
+        #markerToggle button {
+            position: relative;
+            width: 44px;
+            height: 24px;
+            border-radius: 12px;
+            border: none;
+            background: #666;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            padding: 0;
+        }
+
+        #markerToggle button::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: white;
+            transition: transform 0.2s ease;
+        }
+
+        #markerToggle button.on {
+            background: #4CAF50;
+        }
+
+        #markerToggle button.on::after {
+            transform: translateX(20px);
+        }
     </style>
 </head>
 <body>
@@ -37,6 +85,10 @@
             <div>Crossy Road Game</div>
             <div>Use WASD or Arrow Keys to move</div>
             <div id="gameStatus"></div>
+        </div>
+        <div id="markerToggle">
+            <span>Grid & Row Labels</span>
+            <button id="markerToggleBtn" class="on" aria-pressed="true"></button>
         </div>
     </div>
 
@@ -339,6 +391,7 @@
                 this.rowLabels = new Map();
                 this.cars = new Map();
                 this.player = null;
+                this.showMarkers = true; // Toggles row/col grid lines and row number labels
 
                 // Car geometry and materials
                 this.carGeometry = new THREE.BoxGeometry(
@@ -451,11 +504,11 @@
                     this.renderRow(row);
                 });
 
-                // Render grid lines
-                this.renderGridLines(visibleRows);
-
-                // Render row labels
-                this.renderRowLabels(visibleRows);
+                // Render grid lines and row labels, only when markers are enabled
+                if (this.showMarkers) {
+                    this.renderGridLines(visibleRows);
+                    this.renderRowLabels(visibleRows);
+                }
 
                 // Render cars
                 visibleRows.forEach(row => {
@@ -724,6 +777,17 @@
             }
 
             setupInput() {
+                // Grid/row-label marker toggle button
+                const markerToggleBtn = document.getElementById('markerToggleBtn');
+                if (markerToggleBtn) {
+                    markerToggleBtn.addEventListener('click', () => {
+                        this.renderer.showMarkers = !this.renderer.showMarkers;
+                        markerToggleBtn.classList.toggle('on', this.renderer.showMarkers);
+                        markerToggleBtn.setAttribute('aria-pressed', this.renderer.showMarkers.toString());
+                        this.update();
+                    });
+                }
+
                 document.addEventListener('keydown', (event) => {
                     switch(event.code) {
                         case 'KeyW':
